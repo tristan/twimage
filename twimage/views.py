@@ -1,7 +1,11 @@
 # Create your views here.
+import cStringIO
 import os
 import time
+import traceback
 import twitter
+import urllib2
+
 import Image
 import ImageFont
 import ImageDraw
@@ -37,8 +41,15 @@ def _mksect(txt, font, max_width):
     _sections.append(len(txt)+1)
     return _sections
 
+def _checkuser(username):
+    valid_users = ['tristanking']
+    return username in valid_users
+
 def twittertoimage(request, username):
 
+    if not _checkuser(username):
+        raise Http404
+    
     try:
         status = twitter.Api().GetUserTimeline(username)[0]
     except:
@@ -96,9 +107,24 @@ def twittertoimage(request, username):
     
     #draw.text((10,10), '%s %s %s' % (username, s_text, s_time), font=font, fill='#0000ff')
 
+    try:
+        if request.GET.get('extra', '').lower() == 'true':
+            print 'processing extra!'
+            profile_pic_uri = status.GetUser().GetProfileImageUrl()
+            pro_pic = Image.open(cStringIO.StringIO(urllib2.urlopen(profile_pic_uri).read()))
+            pro_pic = pro_pic.resize((23,23))
+            draw.polygon([(width-60, height-10), (width-50, height), (width-40, height-10)], fill='#ffffff')
+            draw.rectangle([(width-62, height+4), (width-38, height+27)], outline='#999999')
+            img.paste(pro_pic, (width-61, height+5))
+            tw_img = Image.open('%s/small_twitter.png' % MEDIA_ROOT)
+            img.paste(tw_img, (14,height+10))
+            height += 4 + 25 + 10
+    except:
+        traceback.print_exc()
+        
     img = img.crop((0,0, width, height))
         
-    out_file = '%s/%s-twitter.jpg' % (MEDIA_ROOT, username)
-    img.save(out_file, 'JPEG', quality=100)
+    out_file = '%s/%s-twitter.png' % (MEDIA_ROOT, username)
+    img.save(out_file, 'PNG')
 
     return serve(request, out_file[1:], '/')
