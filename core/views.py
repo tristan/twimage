@@ -4,6 +4,7 @@ import os
 import time
 import traceback
 import twitter
+import stat
 import urllib2
 
 import Image
@@ -12,10 +13,10 @@ import ImageDraw
 
 from copy import copy
 
-from django.http import Http404
+from django.http import Http404, HttpResponseRedirect, HttpResponseNotModified
 from django.views.static import serve
 
-from app.settings import MEDIA_ROOT
+from twimage.settings import MEDIA_ROOT, MEDIA_URL
 
 def _mksect(txt, font, max_width):
     char_lens = map(lambda x: font.getsize(x)[0], [i for i in txt]) 
@@ -42,23 +43,13 @@ def _mksect(txt, font, max_width):
     return _sections
 
 def _checkuser(username):
-    valid_users = ['tristanking']
+    valid_users = ['tristanking', 'trystn']
     return username in valid_users
 
-def twittertoimage(request, username):
-
-    if not _checkuser(username):
-        raise Http404
-    
-    try:
-        status = twitter.Api().GetUserTimeline(username)[0]
-    except:
-        raise Http404
-
-    print status.created_at
-    print status.created_at_in_seconds
+def _genimage(status, filename, extra=False):
     s_time = time.strftime('%I:%m%p %B %d', time.localtime(status.created_at_in_seconds)).replace('AM','am').replace('PM','pm')
     s_text = status.text
+    username = status.user.screen_name
 
     # base image
     base = Image.open('%s/base.jpg' % MEDIA_ROOT)
@@ -77,7 +68,6 @@ def twittertoimage(request, username):
 
     img = base.copy()
 
-    #img = Image.new('RGBA', (w,h), '#ffffff')
     draw = ImageDraw.Draw(img)
     draw.rectangle([(10,10),(width-10,height-10)], '#ffffff')
     draw.fontmode = "0"
@@ -105,11 +95,8 @@ def twittertoimage(request, username):
             color = date_color
         draw.text((w,h), txt[i], font=font, fill=color)
     
-    #draw.text((10,10), '%s %s %s' % (username, s_text, s_time), font=font, fill='#0000ff')
-
     try:
-        if request.GET.get('extra', '').lower() == 'true':
-            print 'processing extra!'
+        if extra:
             profile_pic_uri = status.GetUser().GetProfileImageUrl()
             pro_pic = Image.open(cStringIO.StringIO(urllib2.urlopen(profile_pic_uri).read()))
             pro_pic = pro_pic.resize((23,23))
@@ -123,8 +110,45 @@ def twittertoimage(request, username):
         traceback.print_exc()
         
     img = img.crop((0,0, width, height))
-        
-    out_file = '%s/%s-twitter.png' % (MEDIA_ROOT, username)
-    img.save(out_file, 'PNG')
+    img.save(filename, 'PNG')
 
-    return serve(request, out_file[1:], '/')
+def _serve(request, filename):
+    return serve(request, filename[1:], '/')
+
+def _getstatus(username='', id='0'):
+    try:
+        if id == '0' and username != '':
+            if not _checkuser(username):
+                raise Http404
+            status = twitter.Api().GetUserTimeline(username)[0]
+            id = status.id
+        elif id != '0':
+            status = twitter.Api().GetStatus(int(id))
+            username = status.GetScreenName()
+            if not _checkuser(username):
+                raise Http404
+        return status
+    except Http404:
+        raise
+    except:
+        traceback.print_exc()
+        raise 'unable to get status'
+
+def fromstatus(request, username, id):
+    try:
+        status = _getstatus(username, id)
+    except:
+        raise
+
+    # check cache
+    extra = request.GET.get('extra', '') == 'true'
+    filename = '%s/cache/%s-%s%s.png' % (MEDIA_ROOT, username, status.id, extra is True and '-extra' or '')
+    if not os.path.exists(filename):
+        try:
+            _genimage(status, filename, extra=extra)
+        except:
+            raise
+    return _serve(request, filename)
+
+def fromuser(request, username):
+    return fromstatus(request, username, '0')
